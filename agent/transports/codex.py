@@ -478,6 +478,19 @@ class ResponsesApiTransport(ProviderTransport):
                 else:
                     response_tools = _rename_client_web_search_for_xai(response_tools)
 
+        # Perplexity reserves web_search for its server-side search tool.
+        # Swap only an already-granted search capability; keep Hermes's
+        # remaining functions and the shared tool schemas unchanged.
+        from utils import base_url_hostname
+
+        if base_url_hostname(params.get("base_url") or "") == "api.perplexity.ai" and response_tools:
+            response_tools = [
+                {"type": "web_search"}
+                if tool.get("type") == "function" and tool.get("name") == "web_search"
+                else tool
+                for tool in response_tools
+            ]
+
         # ``tools`` MUST be omitted entirely when there are no functions to
         # expose: the openai SDK's ``responses.stream()`` / ``responses.parse()``
         # eagerly call ``_make_tools(tools)`` which does ``for tool in tools``
