@@ -45,6 +45,14 @@ def _bounded_prompt_cache_key(value: Any) -> Optional[str]:
     return f"pck_{digest}"
 
 
+def _perplexity_function_name(name: str) -> str:
+    """Keep client tools outside Perplexity's reserved built-in namespace."""
+    wire = f"hermes_{name}"
+    if len(wire) <= 64:
+        return wire
+    return f"{wire[:51]}_{hashlib.sha256(name.encode()).hexdigest()[:12]}"
+
+
 # Wire-name used when Hermes keeps client-side web_search on xAI Responses.
 # A function literally named ``web_search`` collides with Grok's native
 # server-side tool (incomplete hang or HTTP 400 duplicate names); this alias
@@ -483,13 +491,21 @@ class ResponsesApiTransport(ProviderTransport):
         # remaining functions and the shared tool schemas unchanged.
         from utils import base_url_hostname
 
-        if base_url_hostname(params.get("base_url") or "") == "api.perplexity.ai" and response_tools:
-            response_tools = [
-                {"type": "web_search"}
-                if tool.get("type") == "function" and tool.get("name") == "web_search"
-                else tool
-                for tool in response_tools
-            ]
+        is_perplexity = base_url_hostname(params.get("base_url") or "") == "api.perplexity.ai"
+        self._perplexity_tool_names = {}
+        if is_perplexity and response_tools:
+            renamed = []
+            for tool in response_tools:
+                if tool.get("type") == "function":
+                    name = tool["name"]
+                    if name == "web_search":
+                        renamed.append({"type": "web_search"})
+                        continue
+                    wire = _perplexity_function_name(name)
+                    self._perplexity_tool_names[wire] = name
+                    tool = {**tool, "name": wire}
+                renamed.append(tool)
+            response_tools = renamed
 
         # ``tools`` MUST be omitted entirely when there are no functions to
         # expose: the openai SDK's ``responses.stream()`` / ``responses.parse()``
@@ -512,6 +528,10 @@ class ResponsesApiTransport(ProviderTransport):
             ),
             "store": False,
         }
+        if is_perplexity:
+            for item in kwargs["input"]:
+                if item.get("type") == "function_call":
+                    item["name"] = _perplexity_function_name(item["name"])
         if response_tools:
             kwargs["tools"] = response_tools
             kwargs["tool_choice"] = "auto"
@@ -714,6 +734,7 @@ class ResponsesApiTransport(ProviderTransport):
                 # the real ``web_search`` tool (Firecrawl / etc.).
                 if name == _XAI_CLIENT_WEB_SEARCH_ALIAS:
                     name = "web_search"
+                name = getattr(self, "_perplexity_tool_names", {}).get(name, name)
                 tool_calls.append(ToolCall(
                     id=tc.id if hasattr(tc, "id") else (name or None),
                     name=name,

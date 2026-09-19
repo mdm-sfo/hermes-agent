@@ -27,7 +27,7 @@ def test_perplexity_native_search_preserves_other_tools_and_shared_schema():
     payload = build("https://api.perplexity.ai/v1", tools)
     assert payload["tools"][1] == {"type": "web_search"}
     assert [t["name"] for t in payload["tools"] if t["type"] == "function"] == [
-        "terminal", "web_extract",
+        "hermes_terminal", "hermes_web_extract",
     ]
     assert tools == original
     assert payload["store"] is False
@@ -48,6 +48,46 @@ def test_native_search_swap_is_scoped_to_perplexity_host(url):
 def test_search_is_not_enabled_without_granted_capability(tools):
     payload = build("https://api.perplexity.ai/v1", tools)
     assert not any(t["type"] == "web_search" for t in payload.get("tools", []))
+
+
+def test_client_tool_aliases_round_trip_and_replay_without_mutating_history():
+    from types import SimpleNamespace
+
+    transport = get_transport("codex_responses")
+    tools = [function("search_files")]
+    transport.build_kwargs(model="example/model", base_url="https://api.perplexity.ai/v1",
+                           messages=[{"role": "user", "content": "find files"}], tools=tools)
+    response = SimpleNamespace(status="completed", usage=None, output=[SimpleNamespace(
+        type="function_call", id="fc_test", call_id="call_test",
+        name="hermes_search_files", arguments='{"pattern":"test"}', status="completed",
+    )])
+    normalized = transport.normalize_response(response)
+    assert normalized.tool_calls[0].name == "search_files"
+    messages = [
+        {"role": "assistant", "content": None, "tool_calls": [{
+            "id": "call_test", "type": "function", "function": {
+                "name": "search_files", "arguments": '{"pattern":"test"}',
+            },
+        }]},
+        {"role": "tool", "tool_call_id": "call_test", "content": "found"},
+    ]
+    original = copy.deepcopy(messages)
+    kwargs = transport.build_kwargs(model="example/model", base_url="https://api.perplexity.ai/v1",
+                                    messages=messages, tools=tools)
+    call = next(x for x in kwargs["input"] if x["type"] == "function_call")
+    assert call["name"] == "hermes_search_files" and call["call_id"] == "call_test"
+    assert messages == original
+    other = transport.build_kwargs(model="example/model", base_url="https://api.openai.com/v1",
+                                    messages=messages, tools=tools)
+    assert other["tools"][0]["name"] == "search_files"
+    assert not transport._perplexity_tool_names
+
+
+def test_long_tool_names_get_distinct_bounded_aliases():
+    names = ["tool_" + "x" * 59 + suffix for suffix in ("a", "b")]
+    payload = build("https://api.perplexity.ai/v1", [function(n) for n in names])
+    wire_names = [t["name"] for t in payload["tools"]]
+    assert len(set(wire_names)) == 2 and all(len(n) <= 64 for n in wire_names)
 
 
 @pytest.mark.parametrize("url,limit", [
