@@ -1808,6 +1808,9 @@ class GatewaySlashCommandsMixin:
 
         # No args: show interactive picker (Telegram/Discord) or text list
         if not model_input and not explicit_provider:
+            from hermes_cli.chat_model_menu import load_chat_model_menu, list_chat_model_providers
+
+            menu_settings = load_chat_model_menu(_command_profile_home or _hermes_home)
             # Try interactive picker if the platform supports it
             adapter = getattr(self, "_adapter_for_source")(source)
             has_picker = (
@@ -1820,17 +1823,23 @@ class GatewaySlashCommandsMixin:
                     # Offload blocking provider-listing (can fall through to a
                     # synchronous urllib HTTP fetch on a stale cache) off the
                     # event loop so the gateway doesn't freeze. See #41289.
-                    providers = await asyncio.to_thread(
-                        list_picker_providers,
-                        current_provider=current_provider,
-                        current_base_url=current_base_url,
-                        current_model=current_model,
-                        user_providers=user_provs,
-                        custom_providers=custom_provs,
-                        max_models=50,
-                        include_moa=True,
-                        excluded_providers=excluded_provs,
-                    )
+                    if menu_settings:
+                        providers = await asyncio.to_thread(
+                            list_chat_model_providers, menu_settings,
+                            current_provider=current_provider, refresh=force_refresh,
+                        )
+                    else:
+                        providers = await asyncio.to_thread(
+                            list_picker_providers,
+                            current_provider=current_provider,
+                            current_base_url=current_base_url,
+                            current_model=current_model,
+                            user_providers=user_provs,
+                            custom_providers=custom_provs,
+                            max_models=50,
+                            include_moa=True,
+                            excluded_providers=excluded_provs,
+                        )
                 except Exception:
                     providers = []
 
@@ -2129,16 +2138,22 @@ class GatewaySlashCommandsMixin:
             try:
                 # Offload blocking provider-listing off the event loop so the
                 # gateway doesn't freeze on a stale-cache HTTP fetch. See #41289.
-                providers = await asyncio.to_thread(
-                    list_authenticated_providers,
-                    current_provider=current_provider,
-                    current_base_url=current_base_url,
-                    current_model=current_model,
-                    user_providers=user_provs,
-                    custom_providers=custom_provs,
-                    max_models=5,
-                    excluded_providers=excluded_provs,
-                )
+                if menu_settings:
+                    providers = await asyncio.to_thread(
+                        list_chat_model_providers, menu_settings,
+                        current_provider=current_provider, refresh=force_refresh,
+                    )
+                else:
+                    providers = await asyncio.to_thread(
+                        list_authenticated_providers,
+                        current_provider=current_provider,
+                        current_base_url=current_base_url,
+                        current_model=current_model,
+                        user_providers=user_provs,
+                        custom_providers=custom_provs,
+                        max_models=5,
+                        excluded_providers=excluded_provs,
+                    )
                 for p in providers:
                     tag = t("gateway.model.current_tag") if p["is_current"] else ""
                     lines.append(f"**{p['name']}** `--provider {p['slug']}`{tag}:")
