@@ -1528,6 +1528,12 @@ class _CodexCompletionsAdapter:
 
         # Note: the Codex endpoint (chatgpt.com/backend-api/codex) does NOT
         # support max_output_tokens or temperature — omit to avoid 400 errors.
+        # Perplexity's Claude routes require an explicit output limit, including
+        # auxiliary requests such as session titles and compression.
+        if base_url_host_matches(_host_for_input, "api.perplexity.ai"):
+            resp_kwargs["max_output_tokens"] = (
+                kwargs.get("max_completion_tokens") or kwargs.get("max_tokens") or 16384
+            )
 
         # Translate extra_body.reasoning (chat.completions shape) into the
         # Responses API's top-level reasoning + include fields.  Mirrors

@@ -48,3 +48,42 @@ def test_native_search_swap_is_scoped_to_perplexity_host(url):
 def test_search_is_not_enabled_without_granted_capability(tools):
     payload = build("https://api.perplexity.ai/v1", tools)
     assert not any(t["type"] == "web_search" for t in payload.get("tools", []))
+
+
+@pytest.mark.parametrize("url,limit", [
+    ("https://api.perplexity.ai/v1", 64),
+    ("https://chatgpt.com/backend-api/codex", None),
+])
+def test_auxiliary_limit_is_forwarded_only_to_perplexity(url, limit):
+    from types import SimpleNamespace
+    from agent.auxiliary_client import _CodexCompletionsAdapter
+
+    item = SimpleNamespace(type="message", role="assistant", status="completed",
+                           content=[SimpleNamespace(type="output_text", text="Title")])
+    events = [
+        SimpleNamespace(type="response.created"),
+        SimpleNamespace(type="response.output_item.done", item=item),
+        SimpleNamespace(type="response.completed", response=SimpleNamespace(
+            status="completed", id="resp_test", usage=None,
+        )),
+    ]
+
+    class Stream:
+        def __iter__(self):
+            return iter(events)
+
+        def close(self):
+            return None
+
+    captured = {}
+
+    def create(**kwargs):
+        captured.update(kwargs)
+        return Stream()
+
+    client = SimpleNamespace(base_url=url, responses=SimpleNamespace(create=create))
+    response = _CodexCompletionsAdapter(client, "example/model").create(
+        messages=[{"role": "user", "content": "Title this"}], max_tokens=64,
+    )
+    assert response.choices[0].message.content == "Title"
+    assert captured.get("max_output_tokens") == limit
