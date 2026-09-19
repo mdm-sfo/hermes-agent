@@ -2158,15 +2158,20 @@ class GatewaySlashCommandsMixin:
                     tag = t("gateway.model.current_tag") if p["is_current"] else ""
                     lines.append(f"**{p['name']}** `--provider {p['slug']}`{tag}:")
                     if p["models"]:
-                        model_strs = ", ".join(f"`{m}`" for m in p["models"])
-                        extra = t("gateway.model.more_models_suffix", count=p["total_models"] - len(p["models"])) if p["total_models"] > len(p["models"]) else ""
-                        lines.append(f"  {model_strs}{extra}")
+                        from hermes_cli.chat_model_menu import model_menu_command
+
+                        for model in p["models"]:
+                            command = model_menu_command(p["slug"], model)
+                            lines.append(f'  "{command}" | `{model}`')
+                        if p["total_models"] > len(p["models"]):
+                            lines.append(t("gateway.model.more_models_suffix", count=p["total_models"] - len(p["models"])))
                     elif p.get("api_url"):
                         lines.append(f"  `{p['api_url']}`")
                     lines.append("")
             except Exception:
                 pass
 
+            lines.append("Send a command above without the quotes to switch models.")
             lines.append(t("gateway.model.usage_switch_model"))
             lines.append(t("gateway.model.usage_switch_provider"))
             lines.append(t("gateway.model.usage_persist"))

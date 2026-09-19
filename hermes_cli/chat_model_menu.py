@@ -58,3 +58,19 @@ def list_chat_model_providers(settings: dict, *, current_provider: str = "", ref
         for row in payload["providers"] if row.get("authenticated")
     ]
     return filter_chat_model_menu(rows, settings)
+
+
+def model_menu_command(provider: str, model: str) -> str:
+    """Offer a configured exact alias, or an explicit provider-safe command."""
+    from hermes_cli.model_switch import DIRECT_ALIASES, _ensure_direct_aliases
+
+    _ensure_direct_aliases()
+    aliases = [
+        name for name, target in DIRECT_ALIASES.items()
+        if target.provider == provider and target.model == model
+        and not target.base_url
+    ]
+    if aliases:
+        alias = min(aliases, key=lambda name: (len(name), name))
+        return f"/model {alias}"
+    return f"/model {model} --provider {provider}"
