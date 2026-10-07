@@ -1491,6 +1491,12 @@ class _CodexCompletionsAdapter:
         if isinstance(kwargs.get("extra_headers"), dict) and kwargs["extra_headers"]:
             resp_kwargs["extra_headers"] = dict(kwargs["extra_headers"])
         # The Codex endpoint rejects max_output_tokens/temperature (400) — omit.
+        # Perplexity's Claude routes require an explicit output limit, including aux requests
+        # (session titles, compression).
+        if base_url_host_matches(host, "api.perplexity.ai"):
+            resp_kwargs["max_output_tokens"] = (
+                kwargs.get("max_completion_tokens") or kwargs.get("max_tokens") or 16384
+            )
         extra_body = kwargs.get("extra_body") or {}
         if isinstance(extra_body, dict):
             # service_tier (fast mode) is a top-level Responses field; xAI's endpoint rejects it.
