@@ -2948,7 +2948,11 @@ def compress_context(
                 compressed = messages
             else:
                 with aux_progress_hook(_progress_hook), aux_interrupt_protection(
-                    cancel_event=_hard_cancel_event
+                    cancel_event=_hard_cancel_event,
+                    cancel_check=(
+                        (lambda: commit_fence.is_cancelled)
+                        if commit_fence is not None else None
+                    ),
                 ):
                     compressed = compress_fn(messages, **compress_kwargs)
                     # Freeze a hard stop that arrived after the final provider

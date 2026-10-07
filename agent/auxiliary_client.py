@@ -314,7 +314,8 @@ def _aux_interrupt_cancel_requested() -> bool:
     event = getattr(_aux_interrupt_protection, "cancel_event", None)
     if event is not None:
         try:
-            return bool(event.is_set())
+            if event.is_set():
+                return True
         except Exception:
             logger.debug("aux interrupt cancel event check failed", exc_info=True)
             return False
@@ -339,8 +340,8 @@ def aux_interrupt_protection(
     Used by atomic aux tasks (compression) so a mid-flight gateway interrupt
     doesn't abort the call and trigger a degraded fallback. Re-entrant-safe:
     restores the previous value on exit. ``cancel_check`` lets the host retain
-    an explicit hard-cancel path; ``cancel_event`` is preferred when the host
-    already owns an Event. Nested protection scopes inherit both values.
+    an explicit cancellation path alongside ``cancel_event``. Either source
+    can cancel the request. Nested protection scopes inherit both values.
     """
     prev = getattr(_aux_interrupt_protection, "active", False)
     prev_cancel_check = getattr(_aux_interrupt_protection, "cancel_check", None)
@@ -362,9 +363,11 @@ def _capture_aux_cancel_check() -> Optional[Callable[[], Any]]:
     """Capture the current explicit-cancel source on the owning request thread."""
     event = getattr(_aux_interrupt_protection, "cancel_event", None)
     is_set = getattr(event, "is_set", None)
+    check = getattr(_aux_interrupt_protection, "cancel_check", None)
+    if callable(is_set) and callable(check):
+        return lambda: is_set() or check()
     if callable(is_set):
         return is_set
-    check = getattr(_aux_interrupt_protection, "cancel_check", None)
     if callable(check):
         # Preserve callable identity so attempt-local decision objects retain
         # methods such as begin_timeout_cleanup() when captured by adapters.
@@ -466,9 +469,10 @@ def _run_protected_sync_provider_call(
     to wake one request.  Only protected calls with a captured hard-cancel source
     use this seam.  Their provider callback (including stream aggregation) runs
     in a daemon worker while the owner polls cancellation.  On cancel the owner
-    unwinds immediately; the worker is left to finish under the provider timeout
-    already present in ``kwargs``.  It owns no transcript or compressor commit
-    state and never holds the session lock.
+    unwinds immediately. Chat streams shut down their request-owned HTTP/1
+    transport; adapters without that support finish under the provider timeout
+    in ``kwargs``. The worker owns no transcript or compressor commit state
+    and never holds the session lock.
 
     Ordinary auxiliary calls, and protected calls without a cancellation source,
     retain the historical direct synchronous path with no extra thread.
@@ -8868,6 +8872,66 @@ def _create_with_progress(
     )
 
 
+@contextlib.contextmanager
+def _cancel_chat_stream_on_host_stop(chunks: Any):
+    """Wake a blocked HTTP/1 reader when its compression owner cancels.
+
+    Shut down only this response's socket; the reader still owns close().
+    Never shut down an HTTP/2 connection shared by other requests.
+    """
+    cancel_check = _capture_aux_cancel_check() if _aux_interrupt_protected() else None
+    done = threading.Event()
+    watcher = None
+    original_close = None
+    response = getattr(chunks, "response", None)
+    extensions = getattr(response, "extensions", {})
+    if not isinstance(extensions, dict):
+        extensions = {}
+    network_stream = extensions.get("network_stream")
+    if callable(cancel_check) and extensions.get("http_version") in (
+        b"HTTP/1.1", b"HTTP/1.0",
+    ):
+        sock = network_stream.get_extra_info("socket") if network_stream else None
+        if sock is not None:
+            # httpx/OpenAI may close the response inside iteration, before our
+            # finally runs. Disarm the watcher before that returns the HTTP/1
+            # connection to the pool, where a sibling could immediately reuse it.
+            original_close = response.close
+
+            def close_response() -> None:
+                done.set()
+                if watcher is not None:
+                    watcher.join()
+                original_close()
+
+            response.close = close_response
+
+            def watch() -> None:
+                import socket
+
+                while not done.wait(0.02):
+                    if _captured_aux_cancel_requested(cancel_check):
+                        try:
+                            sock.shutdown(socket.SHUT_RDWR)
+                        except OSError:
+                            pass
+                        return
+
+            watcher = threading.Thread(target=watch, name="hermes-aux-stream-cancel", daemon=True)
+            watcher.start()
+    try:
+        if callable(cancel_check) and _captured_aux_cancel_requested(cancel_check):
+            raise AuxiliaryExplicitCancellation()
+        yield
+    finally:
+        done.set()
+        # The watcher must finish before the reader closes or pools the socket.
+        if watcher is not None:
+            watcher.join()
+        if original_close is not None:
+            response.close = original_close
+
+
 def _aggregate_chat_stream(
     chunks: Any,
     *,
@@ -8885,8 +8949,11 @@ def _aggregate_chat_stream(
     """
     acc = _ChatStreamAccumulator(model=model, total_ceiling=total_ceiling)
     try:
-        for chunk in chunks:
-            acc.feed(chunk)
+        with _cancel_chat_stream_on_host_stop(chunks):
+            for chunk in chunks:
+                if _aux_interrupt_protected() and _aux_interrupt_cancel_requested():
+                    raise AuxiliaryExplicitCancellation()
+                acc.feed(chunk)
     finally:
         close_fn = getattr(chunks, "close", None)
         if callable(close_fn):
