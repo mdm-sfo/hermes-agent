@@ -287,23 +287,30 @@ def _commit_model_switch(
 def _show_model_picker(cli, ctx, force_refresh: bool) -> None:
     """``/model`` with no args: open the picker, or print usage when nothing is authed."""
     from cli import _cprint
+    from hermes_cli.chat_model_menu import list_chat_model_providers, load_chat_model_menu
     from hermes_cli.inventory import build_models_payload
     from hermes_cli.providers import get_label
     try:
         if ctx is None:
             raise RuntimeError("inventory context unavailable")
-        providers = build_models_payload(
-            ctx, probe_custom_providers=force_refresh,
-            probe_current_custom_provider=not force_refresh,
-            capabilities=True,  # the effort step hides itself on reasoning-free routes
-            # Keep providers whose pool is entirely in cooldown visible: limits are
-            # per-model for many providers, so another model may work (#103829) —
-            # same contract as the gateway picker (#66584) and aux pickers (#66624).
-            for_picker=True,
-            # Visibility only, not a faster probe: this call live-probes the current custom
-            # endpoint, which historically enjoyed the full 5s discovery budget (#103843).
-            fast_custom_probe=False,
-        )["providers"]
+        # A curated Kiroku menu (webchat-settings.json) narrows the picker to the shared selection.
+        menu_settings = load_chat_model_menu()
+        if menu_settings:
+            providers = list_chat_model_providers(
+                menu_settings, current_provider=cli.provider or "", refresh=force_refresh)
+        else:
+            providers = build_models_payload(
+                ctx, probe_custom_providers=force_refresh,
+                probe_current_custom_provider=not force_refresh,
+                capabilities=True,  # the effort step hides itself on reasoning-free routes
+                # Keep providers whose pool is entirely in cooldown visible: limits are
+                # per-model for many providers, so another model may work (#103829) —
+                # same contract as the gateway picker (#66584) and aux pickers (#66624).
+                for_picker=True,
+                # Visibility only, not a faster probe: this call live-probes the current custom
+                # endpoint, which historically enjoyed the full 5s discovery budget (#103843).
+                fast_custom_probe=False,
+            )["providers"]
     except Exception:
         providers = []
     if not providers:

@@ -12,7 +12,7 @@ import asyncio
 import contextlib
 import dataclasses
 import logging
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from agent.i18n import t
 from gateway.platforms.event import MessageEvent
@@ -129,14 +129,16 @@ class _ModelSwitchContext:
 _TEXT_LISTING_MODELS = 5
 
 
-def _model_provider_listing_lines(providers) -> list[str]:
-    """Text-list body for ``/model`` with no args on platforms without a picker."""
+def _model_provider_listing_lines(providers, limit: Optional[int] = _TEXT_LISTING_MODELS) -> list[str]:
+    """Text-list body for ``/model`` with no args on platforms without a picker.
+
+    ``limit=None`` lists every row model (a curated shared menu)."""
     lines: list[str] = []
     for p in providers:
         tag = t("gateway.model.current_tag") if p["is_current"] else ""
         lines.append(f"**{p['name']}** `--provider {p['slug']}`{tag}:")
         if p["models"]:
-            shown = p["models"][:_TEXT_LISTING_MODELS]  # uncapped rows arrive full; this is a preview
+            shown = p["models"] if limit is None else p["models"][:limit]  # uncapped rows arrive full
             model_strs = ", ".join(f"`{m}`" for m in shown)
             hidden = p["total_models"] - len(shown)
             extra = t("gateway.model.more_models_suffix", count=hidden) if hidden > 0 else ""
@@ -430,14 +432,21 @@ class GatewayModelCommandsMixin:
                 persist_global=ctx.persist_global and global_error is None)
         return reply
 
-    async def _send_model_picker(self, event: MessageEvent, source, adapter, session_key: str, listing_kwargs: dict, on_model_selected) -> bool:
+    async def _send_model_picker(
+        self, event: MessageEvent, source, adapter, session_key: str, listing_kwargs: dict, on_model_selected,
+        *, list_providers: Optional[Callable[[], list]] = None,
+    ) -> bool:
         """Send the interactive /model picker; False when nothing was sent (text fallback). *source*
-        is session-key-normalized so the picker's thread metadata lands where the next turn reads."""
+        is session-key-normalized so the picker's thread metadata lands where the next turn reads.
+        ``list_providers`` replaces the default catalog listing (the shared Kiroku menu)."""
         from hermes_cli.model_switch_providers import list_picker_providers
         try:  # off-loop: listing still reads config/disk cache synchronously (#41289)
-            providers = await asyncio.to_thread(
-                list_picker_providers, max_models=50, include_moa=True, **listing_kwargs
-            )
+            if list_providers is not None:
+                providers = await asyncio.to_thread(list_providers)
+            else:
+                providers = await asyncio.to_thread(
+                    list_picker_providers, max_models=50, include_moa=True, **listing_kwargs
+                )
         except Exception:
             providers = []
         if not providers:
@@ -452,11 +461,23 @@ class GatewayModelCommandsMixin:
         return bool(result.success)
 
     async def _model_listing_reply(
-        self, event: MessageEvent, ctx: _ModelSwitchContext, profile_home
+        self, event: MessageEvent, ctx: _ModelSwitchContext, profile_home, *, refresh: bool = False
     ) -> Optional[str]:
-        """``/model`` with no args: interactive picker where supported, else the text list."""
+        """``/model`` with no args: interactive picker where supported, else the text list.
+
+        A curated Kiroku menu (``webchat-settings.json``, re-read on every open) replaces the
+        catalog listing in both forms."""
+        from gateway.run import _hermes_home
+        from hermes_cli.chat_model_menu import list_chat_model_providers, load_chat_model_menu
         from hermes_cli.model_switch import list_authenticated_providers
         from hermes_cli.providers import get_label
+
+        menu_settings = load_chat_model_menu(profile_home or _hermes_home)
+        list_menu = None
+        if menu_settings:
+            def list_menu() -> list:
+                return list_chat_model_providers(
+                    menu_settings, current_provider=ctx.current_provider, refresh=refresh)
 
         listing_kwargs = dict(
             current_provider=ctx.current_provider, current_base_url=ctx.current_base_url,
@@ -483,14 +504,21 @@ class GatewayModelCommandsMixin:
                 with _profile_runtime_scope(profile_home):
                     return await _picker_switch(model_id, provider_slug)
 
-            if await self._send_model_picker(event, ctx.source, adapter, ctx.session_key, listing_kwargs, _on_model_selected):
+            if await self._send_model_picker(event, ctx.source, adapter, ctx.session_key, listing_kwargs,
+                                             _on_model_selected, list_providers=list_menu):
                 return None  # Picker sent — adapter handles the response
 
         lines = [t("gateway.model.current_label", model=ctx.current_model or t("gateway.shared.unknown_value"),
                    provider=get_label(ctx.current_provider)), ""]
+
+        def _listing_lines() -> list[str]:
+            if list_menu is not None:  # curated: show the whole selection
+                return _model_provider_listing_lines(list_menu(), limit=None)
+            providers = list_authenticated_providers(max_models=_TEXT_LISTING_MODELS, **listing_kwargs)
+            return _model_provider_listing_lines(providers)
+
         try:  # off-loop: listing still reads config/disk cache synchronously (#41289)
-            providers = await asyncio.to_thread(list_authenticated_providers, max_models=_TEXT_LISTING_MODELS, **listing_kwargs)
-            lines.extend(_model_provider_listing_lines(providers))
+            lines.extend(await asyncio.to_thread(_listing_lines))
         except Exception:
             pass
         lines.append(t("gateway.model.usage_switch_model"))
@@ -585,7 +613,7 @@ class GatewayModelCommandsMixin:
         ctx.read_config()
         ctx.apply_override(self._session_model_overrides.get(session_key, {}))
         if not request.target and not request.explicit_provider:
-            return await self._model_listing_reply(event, ctx, profile_home)
+            return await self._model_listing_reply(event, ctx, profile_home, refresh=request.force_refresh)
         result, error = await self._perform_model_switch(ctx, request.target, request.explicit_provider, source)
         if error is not None:
             return error
