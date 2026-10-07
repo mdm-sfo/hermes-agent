@@ -47,6 +47,7 @@ import {
 import { type Translations, useI18n } from '@/i18n'
 import { AlertTriangle } from '@/lib/icons'
 import { requestModelOptions } from '@/lib/model-options'
+import { displayModelName } from '@/lib/model-status-label'
 import { asText } from '@/lib/text'
 import { $cronFocusJobId, $cronJobs, invalidateCronJobsRequests, setCronFocusJobId } from '@/store/cron'
 import { $changeEventsAvailable, $cronChangeTick } from '@/store/live-sync'
@@ -1556,8 +1557,8 @@ function CronEditorDialog({
                           const value = cronModelChoiceValue(provider.slug, model)
 
                           return (
-                            <SelectItem className="font-mono" key={value} value={value}>
-                              {model}
+                            <SelectItem key={value} value={value}>
+                              {displayModelName(model)}
                             </SelectItem>
                           )
                         })}
