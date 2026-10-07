@@ -46,6 +46,7 @@ import {
 import { type Translations, useI18n } from '@/i18n'
 import { AlertTriangle } from '@/lib/icons'
 import { requestModelOptions } from '@/lib/model-options'
+import { modelDisplayParts } from '@/lib/model-status-label'
 import { asText } from '@/lib/text'
 import { $cronFocusJobId, $cronJobs, invalidateCronJobsRequests, setCronFocusJobId } from '@/store/cron'
 import { $changeEventsAvailable, $cronChangeTick } from '@/store/live-sync'
@@ -1343,15 +1344,18 @@ function CronEditorDialog({
                     {modelProviders.map(provider => (
                       <SelectGroup key={provider.slug}>
                         <SelectLabel>{provider.name}</SelectLabel>
-                        {(provider.models ?? []).map(model => (
-                          <SelectItem
-                            className="font-mono"
-                            key={`${provider.slug}:${model}`}
-                            value={`${provider.slug}:${model}`}
-                          >
-                            {model}
-                          </SelectItem>
-                        ))}
+                        {(provider.models ?? []).map(model => {
+                          const { name, tag } = modelDisplayParts(model)
+
+                          return (
+                            <SelectItem
+                              key={`${provider.slug}:${model}`}
+                              value={`${provider.slug}:${model}`}
+                            >
+                              {tag ? `${name} ${tag}` : name}
+                            </SelectItem>
+                          )
+                        })}
                       </SelectGroup>
                     ))}
                   </SelectContent>
