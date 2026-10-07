@@ -7195,6 +7195,75 @@ def _create_with_progress_once(
         chunks, model=model, total_ceiling=total_ceiling, no_progress=chat_stream_windows(client, kwargs, task))
 
 
+@contextlib.contextmanager
+def _cancel_chat_stream_on_host_stop(chunks: Any):
+    """Disconnect a protected stream's provider request when its host explicitly cancels.
+
+    :func:`_run_protected_sync_provider_call` frees the owner on cancel, but the daemon reader keeps
+    the provider generating (and billing) until its own timeout. A watcher ``shutdown()``s THIS
+    response's socket on cancel (FD-safe from a stranger thread; the reader still owns close()).
+    Only HTTP/1.x: an HTTP/2 connection is shared by sibling requests and is never shut down. The
+    body release is fenced so a cancel that lands after the connection returns to the pool cannot
+    hit a socket another request has since acquired. A cancelled stream raises
+    :class:`AuxiliaryExplicitCancellation` instead of yielding a partial response.
+    """
+    cancel_check = _capture_aux_cancel_check() if _aux_interrupt_protected() else None
+    if not callable(cancel_check):
+        yield
+        return
+    if _captured_aux_cancel_requested(cancel_check):
+        # Headers arrived after the owner already unwound: drop the request unread.
+        raise AuxiliaryExplicitCancellation()
+    from agent.agent_runtime_helpers import _shutdown_socket, _socket_from_response
+
+    response = getattr(chunks, "response", None)
+    extensions = getattr(response, "extensions", None)
+    http_version = extensions.get("http_version") if isinstance(extensions, dict) else None
+    sock = _socket_from_response(response) if http_version in (b"HTTP/1.1", b"HTTP/1.0") else None
+    body = getattr(response, "stream", None)
+    release = getattr(body, "close", None)
+    lock = threading.Lock()
+    done = threading.Event()
+    state = {"fired": False}
+    fenced_release = None
+    if sock is not None and callable(release):
+        def fenced_release() -> None:
+            with lock:
+                done.set()
+            release()
+
+        try:
+            body.close = fenced_release
+        except (AttributeError, TypeError):
+            sock = fenced_release = None  # cannot fence the release: never shut down a socket we may not own
+
+    if sock is not None:
+        def watch() -> None:
+            while not done.wait(0.02):
+                if _captured_aux_cancel_requested(cancel_check):
+                    with lock:
+                        if not done.is_set():
+                            state["fired"] = True
+                            _shutdown_socket(sock)
+                    return
+
+        threading.Thread(target=watch, name="hermes-aux-stream-cancel", daemon=True).start()
+    try:
+        yield
+    except Exception as exc:
+        if state["fired"]:
+            raise AuxiliaryExplicitCancellation() from exc
+        raise
+    finally:
+        with lock:
+            done.set()
+        if fenced_release is not None and getattr(body, "close", None) is fenced_release:
+            with contextlib.suppress(AttributeError, TypeError):
+                body.close = release
+    if state["fired"]:
+        raise AuxiliaryExplicitCancellation()
+
+
 def _aggregate_chat_stream(
     chunks: Any, *, model: str = "", total_ceiling: Optional[float] = None,
     no_progress: "Optional[Tuple[float, Optional[float]]]" = None,
@@ -7205,7 +7274,8 @@ def _aggregate_chat_stream(
     acc = _ChatStreamAccumulator(
         model=model, total_ceiling=total_ceiling, host_deadline=_current_aux_stream_deadline())
     try:
-        consume_chat_stream(chunks, acc, no_progress)
+        with _cancel_chat_stream_on_host_stop(chunks):
+            consume_chat_stream(chunks, acc, no_progress)
     finally:
         _close_chunk_stream(chunks)
     return acc.finish()
