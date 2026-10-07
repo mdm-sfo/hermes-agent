@@ -66,6 +66,7 @@ gateway:
     current_label: "Current: `{model}` on {provider}"
     current_tag: " (current)"
     more_models_suffix: " (+{count} more)"
+    usage_send_command: "Send a command above without the quotes to switch models."
     usage_switch_model: "`/model <name>` — switch model"
     usage_switch_provider: "`/model <name> --provider <slug>` — switch provider"
     usage_persist: "`/model <name> --global` — persist"

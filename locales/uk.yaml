@@ -63,6 +63,7 @@ gateway:
     current_label: "Поточна: `{model}` на {provider}"
     current_tag: " (поточна)"
     more_models_suffix: " (+{count} ще)"
+    usage_send_command: "Надішліть одну з команд вище без лапок, щоб змінити модель."
     usage_switch_model: "`/model <name>` — змінити модель"
     usage_switch_provider: "`/model <name> --provider <slug>` — змінити провайдера"
     usage_persist: "`/model <name> --global` — зберегти назавжди"

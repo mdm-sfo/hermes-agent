@@ -63,6 +63,7 @@ gateway:
     current_label: "Reatha: `{model}` ar {provider}"
     current_tag: " (reatha)"
     more_models_suffix: " (+{count} eile)"
+    usage_send_command: "Seol ordú thuas gan na comharthaí athfhriotail chun an tsamhail a athrú."
     usage_switch_model: "`/model <name>` — athraigh an tsamhail"
     usage_switch_provider: "`/model <name> --provider <slug>` — athraigh an soláthraí"
     usage_persist: "`/model <name> --global` — coinnigh"

@@ -63,6 +63,7 @@ gateway:
     current_label: "現在: `{model}` ({provider})"
     current_tag: " (現在)"
     more_models_suffix: " (他 {count} 件)"
+    usage_send_command: "モデルを切り替えるには、上のコマンドを引用符なしで送信してください。"
     usage_switch_model: "`/model <name>` — モデルを切り替え"
     usage_switch_provider: "`/model <name> --provider <slug>` — プロバイダーを切り替え"
     usage_persist: "`/model <name> --global` — 永続化"

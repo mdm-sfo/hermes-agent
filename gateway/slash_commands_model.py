@@ -132,17 +132,22 @@ _TEXT_LISTING_MODELS = 5
 def _model_provider_listing_lines(providers, limit: Optional[int] = _TEXT_LISTING_MODELS) -> list[str]:
     """Text-list body for ``/model`` with no args on platforms without a picker.
 
-    ``limit=None`` lists every row model (a curated shared menu)."""
+    Each model is listed with a ready-to-send switch command (a configured alias when one targets
+    exactly that provider's model). ``limit=None`` lists every row model (a curated shared menu).
+    """
+    from hermes_cli.chat_model_menu import model_menu_command
+
     lines: list[str] = []
     for p in providers:
         tag = t("gateway.model.current_tag") if p["is_current"] else ""
         lines.append(f"**{p['name']}** `--provider {p['slug']}`{tag}:")
         if p["models"]:
             shown = p["models"] if limit is None else p["models"][:limit]  # uncapped rows arrive full
-            model_strs = ", ".join(f"`{m}`" for m in shown)
+            for model in shown:
+                lines.append(f'  "{model_menu_command(p["slug"], model)}" | `{model}`')
             hidden = p["total_models"] - len(shown)
-            extra = t("gateway.model.more_models_suffix", count=hidden) if hidden > 0 else ""
-            lines.append(f"  {model_strs}{extra}")
+            if hidden > 0:
+                lines.append(t("gateway.model.more_models_suffix", count=hidden))
         elif p.get("api_url"):
             lines.append(f"  `{p['api_url']}`")
         lines.append("")
@@ -521,6 +526,7 @@ class GatewayModelCommandsMixin:
             lines.extend(await asyncio.to_thread(_listing_lines))
         except Exception:
             pass
+        lines.append(t("gateway.model.usage_send_command"))
         lines.append(t("gateway.model.usage_switch_model"))
         lines.append(t("gateway.model.usage_switch_provider"))
         lines.append(t("gateway.model.usage_persist"))

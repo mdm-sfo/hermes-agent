@@ -95,6 +95,10 @@ async def test_gateway_model_menu_uses_live_selection_before_catalog_cap(home, m
 
     save(home, ["one/selected"])
     catalog = rows()
+    from hermes_cli.model_switch import DirectAlias
+    monkeypatch.setattr("hermes_cli.model_switch.DIRECT_ALIASES", {
+        "chosen": DirectAlias("selected", "one", ""),
+    })
     def inventory(ctx, **kwargs):
         limit = kwargs.get("max_models")
         return {"providers": [{**r, "models": r["models"][:limit]} for r in catalog]}
@@ -121,6 +125,8 @@ async def test_gateway_model_menu_uses_live_selection_before_catalog_cap(home, m
         assert [(r["slug"], r["models"]) for r in adapter.providers] == [("one", ["selected"])]
     else:
         assert "**One**" in result and "`selected`" in result
+        assert '"/model chosen" | `selected`' in result
+        assert "without the quotes" in result
         assert "**Two**" not in result and "other-" not in result
     save(home, ["two/namespace/model"])
     result = await runner._handle_model_command(event)
@@ -143,3 +149,32 @@ def test_terminal_model_menu_uses_shared_selection(home, monkeypatch):
                             _open_model_picker=lambda providers, *a, **k: captured.extend(providers))
     HermesCLI._handle_model_switch(shell, "/model")
     assert [(r["slug"], r["models"]) for r in captured] == [("two", ["namespace/model"])]
+
+
+def test_menu_command_uses_exact_provider_alias_and_resolves_back(home, monkeypatch):
+    from hermes_cli.chat_model_menu import model_menu_command
+    from hermes_cli.model_switch import DirectAlias, resolve_alias
+
+    monkeypatch.setattr("hermes_cli.model_switch.DIRECT_ALIASES", {
+        "other": DirectAlias("same-model", "other-provider", ""),
+        "long-name": DirectAlias("same-model", "provider", ""),
+        "short": DirectAlias("same-model", "provider", ""),
+    })
+    command = model_menu_command("provider", "same-model")
+    assert command == "/model short"
+    assert resolve_alias(command.removeprefix("/model "), "other-provider") == (
+        "provider", "same-model", "short",
+    )
+    assert model_menu_command("third-provider", "same-model") == (
+        "/model same-model --provider third-provider"
+    )
+
+
+def test_menu_command_does_not_offer_alias_for_different_endpoint(home, monkeypatch):
+    from hermes_cli.chat_model_menu import model_menu_command
+    from hermes_cli.model_switch import DirectAlias
+
+    monkeypatch.setattr("hermes_cli.model_switch.DIRECT_ALIASES", {
+        "local": DirectAlias("same-model", "custom", "http://other-endpoint/v1"),
+    })
+    assert model_menu_command("custom", "same-model") == "/model same-model --provider custom"

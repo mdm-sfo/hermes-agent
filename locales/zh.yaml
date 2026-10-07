@@ -63,6 +63,7 @@ gateway:
     current_label: "当前：`{model}`（{provider}）"
     current_tag: "（当前）"
     more_models_suffix: "（还有 {count} 个）"
+    usage_send_command: "发送上方任一命令（不含引号）即可切换模型。"
     usage_switch_model: "`/model <name>` — 切换模型"
     usage_switch_provider: "`/model <name> --provider <slug>` — 切换提供方"
     usage_persist: "`/model <name> --global` — 永久保存"

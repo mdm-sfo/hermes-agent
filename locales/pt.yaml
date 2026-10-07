@@ -63,6 +63,7 @@ gateway:
     current_label: "Atual: `{model}` em {provider}"
     current_tag: " (atual)"
     more_models_suffix: " (+{count} mais)"
+    usage_send_command: "Envie um dos comandos acima sem as aspas para trocar de modelo."
     usage_switch_model: "`/model <name>` — mudar de modelo"
     usage_switch_provider: "`/model <name> --provider <slug>` — mudar de fornecedor"
     usage_persist: "`/model <name> --global` — guardar permanentemente"
