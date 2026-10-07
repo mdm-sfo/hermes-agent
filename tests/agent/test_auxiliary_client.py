@@ -4068,8 +4068,32 @@ class TestCodexAuxiliaryAdapterReservedToolAliases:
         {"role": "tool", "tool_call_id": "c1", "content": "ok"},
     ]
 
+    def test_perplexity_wire_tools_match_main_transport(self):
+        """Fork behavior: Perplexity gets its native ``web_search`` and every client function namespaced."""
+        from agent.codex_responses_adapter import classify_responses_route
+        from agent.transports.codex import ResponsesApiTransport
+
+        base_url = "https://api.perplexity.ai/v1"
+        adapter = _CodexCompletionsAdapter(SimpleNamespace(base_url=base_url), "m")
+        resp_kwargs, _, _ = adapter._build_responses_kwargs(
+            {"model": "m", "messages": self._HISTORY, "tools": self._TOOLS}
+        )
+        route = classify_responses_route(SimpleNamespace(provider="custom", base_url=base_url))
+        main_kwargs = ResponsesApiTransport().build_kwargs(
+            "m", self._HISTORY, self._TOOLS, provider="custom", base_url=base_url, **route._asdict()
+        )
+        assert resp_kwargs["tools"] == main_kwargs["tools"]
+        functions = [t for t in resp_kwargs["tools"] if t.get("type") == "function"]
+        assert all(t["strict"] is False for t in functions)
+        assert resp_kwargs["tools"][0] == {"type": "web_search"}
+        namespaced = ("search_files", "people_search", "read_file", "tool_search")
+        assert [t["name"] for t in functions] == [f"hermes_{n}" for n in namespaced]
+        history_names = [i["name"] for i in resp_kwargs["input"] if i.get("type") == "function_call"]
+        assert history_names == ["hermes_search_files"]
+        assert history_names == [i["name"] for i in main_kwargs["input"] if i.get("type") == "function_call"]
+        assert resp_kwargs["_wire_aliases"] == {f"hermes_{n}": n for n in namespaced}
+
     @pytest.mark.parametrize("base_url, aliased", [
-        ("https://api.perplexity.ai/v1", {"web_search", "search_files", "people_search"}),
         ("https://opencode.ai/zen/v1", {"web_search", "search_files"}),
         # xAI (client web-search mode): Grok's native ``web_search`` and ``tool_search`` collide.
         ("https://api.x.ai/v1", {"web_search", "tool_search"}),
@@ -4121,7 +4145,8 @@ class TestCodexAuxiliaryAdapterReservedToolAliases:
 
         wire_tools = sent.get("tools") or sent.get("extra_body", {}).get("tools")  # SDK transform bypass moves bulk fields
         assert "_wire_aliases" not in sent and "_wire_aliases" not in sent.get("extra_body", {})
-        assert "hermes_search_files" in {t["name"] for t in wire_tools}
+        # Perplexity's native ``{"type": "web_search"}`` carries no name.
+        assert "hermes_search_files" in {t.get("name") for t in wire_tools}
         assert [tc.function.name for tc in response.choices[0].message.tool_calls] == ["search_files"]
 
 

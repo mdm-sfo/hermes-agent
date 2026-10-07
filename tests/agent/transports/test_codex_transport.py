@@ -1245,6 +1245,8 @@ class TestResponsesReservedToolAliases:
         assert "hermes_search_files" not in names
 
     def test_perplexity_agent_api_aliases_reserved_names(self, transport, monkeypatch):
+        # Fork behavior: a granted web_search becomes Perplexity's native built-in, and every
+        # other client function is namespaced (not just the currently reserved names).
         kw = transport.build_kwargs(
             model="perplexity/sonar",
             messages=[{"role": "user", "content": "hi"}],
@@ -1253,8 +1255,9 @@ class TestResponsesReservedToolAliases:
             base_url="https://api.perplexity.ai/v1",
         )
         names = self._names(kw)
+        assert {"type": "web_search"} in kw["tools"]
         assert "hermes_search_files" in names
-        assert "hermes_web_search" in names
+        assert "hermes_web_search" not in names
         assert "search_files" not in names
         assert "web_search" not in names
         assert "hermes_fetch_url" in names
@@ -1263,10 +1266,11 @@ class TestResponsesReservedToolAliases:
         assert "fetch_url" not in names
         assert "people_search" not in names
         assert "finance_search" not in names
-        assert "read_file" in names
+        assert "hermes_read_file" in names
+        assert "read_file" not in names
         assert transport._last_wire_aliases == {
             "hermes_search_files": "search_files",
-            "hermes_web_search": "web_search",
+            "hermes_read_file": "read_file",
             "hermes_fetch_url": "fetch_url",
             "hermes_people_search": "people_search",
             "hermes_finance_search": "finance_search",

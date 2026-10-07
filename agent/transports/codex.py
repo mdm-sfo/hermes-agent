@@ -151,6 +151,37 @@ def _alias_reserved_tools(
     return rewritten, alias_map
 
 
+def _perplexity_wire_name(name: str) -> str:
+    """``hermes_<name>`` bounded to the 64-char function-name limit; long names keep a distinct hash suffix."""
+    wire = f"{_RESERVED_TOOL_ALIAS_PREFIX}{name}"
+    if len(wire) <= 64:
+        return wire
+    return f"{wire[:51]}_{hashlib.sha256(name.encode('utf-8', errors='replace')).hexdigest()[:12]}"
+
+
+def _alias_perplexity_tools(response_tools: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """Perplexity Agent API: native search + namespaced client functions; returns ``(tools, {alias: original})``.
+
+    Perplexity owns a growing set of built-in tool names (web_search, fetch_url, search_files, ...), so
+    every client function goes on the wire as ``hermes_<name>`` instead of chasing a reserved-name list.
+    A granted client ``web_search`` is swapped 1:1 (same position) for Perplexity's server-side
+    ``{"type": "web_search"}`` — never an additive grant. Shared tool schemas are not mutated.
+    """
+    rewritten: list[dict[str, Any]] = []
+    alias_map: dict[str, str] = {}
+    for tool in response_tools:
+        name = tool.get("name") if isinstance(tool, dict) and tool.get("type") == "function" else None
+        if not name:
+            rewritten.append(tool)
+        elif name == "web_search":
+            rewritten.append({"type": "web_search"})
+        else:
+            wire = _perplexity_wire_name(name)
+            alias_map[wire] = name
+            rewritten.append({**tool, "name": wire})
+    return rewritten, alias_map
+
+
 def _xai_prefers_native_web_search() -> bool:
     """True when xAI Responses should use Grok's native ``web_search`` built-in.
 
@@ -247,10 +278,10 @@ def _alias_wire_tools(
     if response_tools and _is_opencode_responses_backend(params):
         response_tools, _oc_aliases = _alias_reserved_tools(response_tools, _OPENCODE_RESERVED_TOOL_NAMES)
         wire_aliases.update(_oc_aliases)
-    # Perplexity's Agent API reserves the same names as server-side tools.
-    # Keep Hermes's client-side functions available under wire aliases.
+    # Perplexity's Agent API reserves built-in tool names server-side: use its native web_search and
+    # keep every Hermes client function under a hermes_<name> wire alias.
     if response_tools and _is_perplexity_responses_backend(params):
-        response_tools, _pplx_aliases = _alias_reserved_tools(response_tools, _PERPLEXITY_RESERVED_TOOL_NAMES)
+        response_tools, _pplx_aliases = _alias_perplexity_tools(response_tools)
         wire_aliases.update(_pplx_aliases)
     # xAI server-side web search vs Hermes web providers. grok models on xAI's /v1/responses surface have a
     # *native*, server-executed web search. A client-side function literally named ``web_search`` collides
@@ -728,6 +759,13 @@ class ResponsesApiTransport(ProviderTransport):
             ),
             "store": False,
         }
+        # Replayed Perplexity tool calls must carry the same wire names the tools were declared under.
+        if _is_perplexity_responses_backend(params):
+            kwargs["input"] = [
+                {**item, "name": _perplexity_wire_name(item["name"])}
+                if isinstance(item, dict) and item.get("type") == "function_call" and item.get("name") else item
+                for item in kwargs["input"]
+            ]
         # ``tools`` MUST be omitted when empty: the openai SDK iterates it without a None guard.
         if response_tools:
             kwargs["tools"] = response_tools
